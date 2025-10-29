@@ -1,64 +1,78 @@
-module top(
-  input CLOCK_50, // 50 MHz clock
-  input [3:0] KEY, // KEY[0] is reset
-  input [9:0] SW,
-  output reg [9:0] LEDR,
-  output [6:0] HEX5, HEX4, HEX3, HEX2, HEX1, HEX0);
-logic        clk, reset, memwrite;
-  logic [31:0] pc, instr;
-  logic [31:0] writedata, addr, readdata;
-integer counter;  
-  always @(posedge CLOCK_50) 
-      counter <= counter + 1;
-  assign clk = counter[21];
-// 50MHz / 2^22 = 11.9 Hz
-  assign reset = ~KEY[0];
-// active low
+module testbench();
+  // Sinais de entrada para o módulo 'top'
+  logic       CLOCK_50;
+  logic [3:0] KEY;
+  logic [9:0] SW;
 
-  // microprocessor
-  riscvmulti cpu(clk, reset, addr, writedata, memwrite, readdata);
+  // Sinais de saída do módulo 'top'
+  wire  [9:0] LEDR;
+  wire  [6:0] HEX5, HEX4, HEX3, HEX2, HEX1, HEX0;
 
-  // memory-mapped i/o
-  wire isIO  = addr[8];
-// 0x0000_0100
-  wire isRAM = !isIO;
-
-  // *** INÍCIO DA CORREÇÃO ***
-  // Criar um sinal de write-enable específico para a RAM.
-  // A escrita na RAM só deve ocorrer se a CPU quiser escrever (memwrite)
-  // E o endereço for para a RAM (isRAM).
-  wire ram_we = memwrite & isRAM;
-  
-  // memory 
-  // Conectar o novo sinal 'ram_we' na porta 'we' do módulo mem.
-  mem ram(clk, ram_we, addr, writedata, MEM_readdata);
-  // *** FIM DA CORREÇÃO ***
-
-  localparam IO_LEDS_bit = 2; // 0x0000_0104
-  localparam IO_HEX_bit  = 3;
-// 0x0000_0108
-  localparam IO_KEY_bit  = 4; // 0x0000_0110 
-  localparam IO_SW_bit   = 5;
-// 0x0000_0120
-  reg [23:0] hex_digits; // memory-mapped I/O register for HEX
-  dec7seg hex0(hex_digits[ 3: 0], HEX0);
-dec7seg hex1(hex_digits[ 7: 4], HEX1);
-  dec7seg hex2(hex_digits[11: 8], HEX2);
-  dec7seg hex3(hex_digits[15:12], HEX3);
-  dec7seg hex4(hex_digits[19:16], HEX4);
-  dec7seg hex5(hex_digits[23:20], HEX5);
-always @(posedge clk)
-    if (memwrite & isIO) begin // I/O write 
-      if (addr[IO_LEDS_bit])
-        LEDR <= writedata;
-if (addr[IO_HEX_bit])
-        hex_digits <= writedata;
+  // Instanciar o "Device Under Test" (DUT) - o seu sistema completo
+  top dut (
+    .CLOCK_50(CLOCK_50),
+    .KEY(KEY),
+    .SW(SW),
+    .LEDR(LEDR),
+    .HEX5(HEX5),
+    .HEX4(HEX4),
+    .HEX3(HEX3),
+    .HEX2(HEX2),
+    .HEX1(HEX1),
+    .HEX0(HEX0)
+  );
+    
+  // Gerador de Clock (50 MHz simulado - 20ns de período)
+  always begin
+    CLOCK_50 = 1'b1; #10;
+    CLOCK_50 = 1'b0; #10;
   end
-  assign IO_readdata = addr[IO_KEY_bit] ?
-{32'b0, KEY} :
-                       addr[ IO_SW_bit] ?
-{32'b0,  SW} : 
-                                           32'b0       ;
-assign readdata = isIO ? IO_readdata : MEM_readdata;
+
+  // Sequência de Teste
+  initial begin
+    $dumpfile("dump.vcd"); 
+    $dumpvars(0, testbench);
+    
+    // 1. Iniciar em estado de Reset
+    // (KEY[0] = 0 -> reset = 1, pois é ativo baixo)
+    KEY = 4'b1110; // KEY[0] = 0
+    SW  = 10'b0;
+    #100; // Espera 100ns
+
+    // 2. Liberar o Reset
+    KEY = 4'b1111; // KEY[0] = 1
+    $display("[%0t] Reset liberado. CPU iniciando...", $time);
+    
+    // Espera o CPU iniciar e escrever '1' nos LEDs
+    wait (LEDR == 10'b1);
+    $display("[%0t] CPU inicializou. LEDR = %b", $time, LEDR);
+    #1000; // Espera um tempo
+
+    // 3. Simular o primeiro pressionamento do SW[1]
+    // A máscara no seu programa.asm é 0x2, que corresponde ao SW[1]
+    $display("[%0t] Pressionando SW[1]...", $time);
+    SW[1] <= 1'b1;
+    
+    // Espera o programa detectar a borda, rotacionar e escrever '2' nos LEDs
+    wait (LEDR == 10'b10); 
+    $display("[%0t] Rotação 1 detectada. LEDR = %b", $time, LEDR);
+    
+    // 4. Soltar o SW[1] (essencial para a detecção de borda)
+    SW[1] <= 1'b0;
+    $display("[%0t] Soltando SW[1].", $time);
+    #1000; // Espera a liberação
+
+    // 5. Simular o segundo pressionamento do SW[1]
+    $display("[%0t] Pressionando SW[1] novamente...", $time);
+    SW[1] <= 1'b1;
+    
+    // Espera o programa detectar a borda e escrever '4' nos LEDs
+    wait (LEDR == 10'b100);
+    $display("[%0t] Rotação 2 detectada. LEDR = %b", $time, LEDR);
+    SW[1] <= 1'b0; // Solta o botão
+    
+    $display("\n[%0t] SIMULAÇÃO BEM-SUCEDIDA!", $time);
+    $finish;
+  end
 
 endmodule
